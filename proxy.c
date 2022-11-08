@@ -16,7 +16,7 @@
 
 void echo_cnt(int connfd); 
 void *thread(void *vargp);
-void doit(int fd);
+// void my_doit(struct MultipleArg *arg);
 
 // void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *end_host, char *end_port);
@@ -32,66 +32,13 @@ static const char *Connection = "Connection: close\r\n";
 static const char *Proxy_Connection = "Proxy-Connection: close\r\n";
 static sem_t mutex;
 sbuf_t sbuf;
-
-
-
-
-int main(int argc, char **argv)
+struct MultipleArg
 {
-  int listenfd, connfd;
+  int connfd;
   char hostname[MAXLINE], port[MAXLINE];
-  socklen_t clientlen;
-  struct sockaddr_storage clientaddr;
-  pthread_t tid;
-
-  /* Check command line args */
-  if (argc != 2)
-  {
-    fprintf(stderr, "usage: %s <port>\n", argv[0]);
-    exit(1);
-  }
-  listenfd = Open_listenfd(argv[1]); // 듣기 소켓 오픈
-
-  ////////////스레드만들기
-  sbuf_init(&sbuf, SBUFSIZE);
-  for (int i = 0; i < NTHREADS; i++) /* Create worker threads */
-    Pthread_create(&tid, NULL, thread, NULL);
-  /////////////////////
-
-  /* 무한 서버 루프 */
-  while (1)
-  {
-    clientlen = sizeof(clientaddr);
-    /* 연결 요청 접수 */
-    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
-    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
-    printf("Accepted connection from (%s, %s)\n", hostname, port);
-    /* Transaction 수행 */
-    
-    sbuf_insert(&sbuf, connfd);
-    // printf("나 이제 doit 실행한다...????");
-  }
-}
-
-void *thread(void *vargp)
-{
-  Pthread_detach(pthread_self()); 
-  while (1) {
-    int connfd = sbuf_remove(&sbuf); /* Remove connfd from buffer */
-    doit(connfd); /* Service client */ 
-    Close(connfd);
-  } 
-}
-
-static void init_doit(void)
-{
-  Sem_init(&mutex, 0, 1);
-  // byte_cnt = 0;
-}
-
-
+};
 /* doit : 한 개의 HTTP transaction 처리 */
-void doit(int first_fd)
+void my_doit(struct MultipleArg *arg)
 {
   int is_static;
   struct stat sbuf;
@@ -102,12 +49,11 @@ void doit(int first_fd)
   rio_t rio;
   rio_t rio2;
   static pthread_once_t once = PTHREAD_ONCE_INIT;
-
-  Pthread_once(&once, init_doit);
-  
+  struct MultipleArg my_arg;
+  my_arg = *((struct MultipleArg *)arg);
 
   /* Request Line과 헤더를 읽기 */
-  Rio_readinitb(&rio, first_fd);
+  Rio_readinitb(&rio, my_arg.connfd);
   
   Rio_readlineb(&rio, buf, MAXLINE);
   printf("Request headers:\n");
@@ -116,12 +62,12 @@ void doit(int first_fd)
 
   /* GET 메소드 외에는 지원하지 않음 - 다른 요청이 오면 에러 띄우고 종료 */
   if (!strcasecmp(method, "HEAD"))
-    parse_uri(uri, filename, end_host, end_port); // 파싱을 하면 예린이의 포트번호를 알아내야 함
+    parse_uri(uri, filename, my_arg.hostname, my_arg.port); // 파싱을 하면 예린이의 포트번호를 알아내야 함
   else if (!strcasecmp(method, "GET"))
-    parse_uri(uri, filename, end_host, end_port); // 파싱을 하면 예린이의 포트번호를 알아내야 함
+    parse_uri(uri, filename, my_arg.hostname, my_arg.port); // 파싱을 하면 예린이의 포트번호를 알아내야 함
   else
   {
-    clienterror(first_fd, method, "501", "Not implemented", "Tiny does not implement this method");
+    clienterror(my_arg.connfd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
 
@@ -134,23 +80,22 @@ void doit(int first_fd)
     return;
   }
 
-  make_packet(rqheader,filename, end_host, end_port);
+  make_packet(rqheader,filename, my_arg.hostname, my_arg.port);
 
   /*송이 -> 예린 연결*/
   
   //P(&mutex);
-  end_fd = Open_clientfd(end_host, end_port);
+  end_fd = Open_clientfd(my_arg.hostname, my_arg.port);
   
   printf("Debug: This is request header \n");
   printf("%s \n", rqheader);
-  printf("Debug: endport is.. %s \n",end_port );
-  printf("Debug: endhost is.. %s \n", end_host);
+  printf("Debug: endport is.. %s \n",my_arg.port );
+  printf("Debug: endhost is.. %s \n", my_arg.hostname);
   printf("Debug: strlen(rqheader) is... %d \n",strlen(rqheader));
   printf("Debug: endfd is... %d \n",end_fd);  
 
 
   Rio_readinitb(&rio2, end_fd);
-  // Rio_readlineb(&rio2, rqheader, MAXLINE);
   
   Rio_writen(end_fd, rqheader, strlen(rqheader));
   printf("다썼당!!! \n");
@@ -162,11 +107,66 @@ void doit(int first_fd)
   {                                                                    // 송이는 예린이가 준 답장 읽음
     printf("나는 송이, %d바이트를 받고 중선이한테 그대~로 넘겨줌", n); // 답장을 중선에게 주겠음
     
-    Rio_writen(first_fd, buf, n); //송이 -> 중선
+    Rio_writen(my_arg.connfd, buf, n); //송이 -> 중선
     //모든 과정이 완료됨! 중선->송이->예린->송이->중선
   }
   
 }
+
+
+int main(int argc, char **argv)
+{
+  int listenfd, *connfdp;
+  char hostname[MAXLINE], port[MAXLINE];
+  socklen_t clientlen;
+  struct sockaddr_storage clientaddr;
+  struct MultipleArg *multiple_arg;
+  pthread_t tid;
+
+
+
+  /* Check command line args */
+  if (argc != 2)
+  {
+    fprintf(stderr, "usage: %s <port>\n", argv[0]);
+    exit(1);
+  }
+  listenfd = Open_listenfd(argv[1]); // 듣기 소켓 오픈
+
+
+  /* 무한 서버 루프 */
+  while (1)
+  {
+    clientlen = sizeof(clientaddr);
+    void * temp = malloc(sizeof(struct MultipleArg));
+    multiple_arg = (struct MultipleArg *)temp;
+    multiple_arg->connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+    
+    /* 연결 요청 접수 */
+    //connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
+    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
+    strcpy(multiple_arg->hostname, hostname);
+    strcpy(multiple_arg->port, port);
+    printf("Accepted connection from (%s, %s)\n", hostname, port);
+
+
+    /* Transaction 수행 */
+    Pthread_create(&tid, NULL, thread, multiple_arg);
+    // printf("나 이제 doit 실행한다...????");
+  }
+}
+
+void *thread(void *vargp)
+{
+  struct MultipleArg my_arg;
+  my_arg = *((struct MultipleArg *)vargp);
+  Pthread_detach(pthread_self()); 
+  Free(vargp);
+  my_doit(&my_arg);
+  Close(my_arg.connfd);
+  return NULL; 
+}
+
 
 
 void make_packet(char *rqheader, char *filename, char *end_host, char *end_port)
