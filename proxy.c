@@ -6,8 +6,6 @@
 
 
 //curl -v --proxy http://localhost:15214 http://localhost:15213/home.html
-//curl -v --proxy http://localhost:15214 http://localhost:15213/home.html
-//curl -v --proxy http://localhost:15214 http://localhost:15213/home.html
 
 void doit(int fd);
 // void read_requesthdrs(rio_t *rp);
