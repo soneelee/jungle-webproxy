@@ -9,16 +9,18 @@
 #define NTHREADS 4
 #define SBUFSIZE 16
 
+//curl -v --proxy http://localhost:15214 http://localhost:15213/home.html
+// 54.180.131.142
 
-//curl -v --proxy http://localhost:15214 http://localhost:15213/home.html
-//curl -v --proxy http://localhost:15214 http://localhost:15213/home.html
-//curl -v --proxy http://localhost:15214 http://localhost:15213/home.html
+typedef struct _MultipleArg
+{
+  int connfd;
+  char hostname[MAXLINE], port[MAXLINE];
+} MultipleArg;
 
-void echo_cnt(int connfd); 
+
+void doit(MultipleArg *arg);
 void *thread(void *vargp);
-// void my_doit(struct MultipleArg *arg);
-
-// void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *end_host, char *end_port);
 void get_filetype(char *filename, char *filetype);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
@@ -31,30 +33,78 @@ static const char *user_agent_hdr =
 static const char *Connection = "Connection: close\r\n";
 static const char *Proxy_Connection = "Proxy-Connection: close\r\n";
 static sem_t mutex;
-sbuf_t sbuf;
-struct MultipleArg
+
+
+int main(int argc, char **argv)
 {
-  int connfd;
+  int listenfd, *connfdp;
   char hostname[MAXLINE], port[MAXLINE];
-};
-/* doit : 한 개의 HTTP transaction 처리 */
-void my_doit(struct MultipleArg *arg)
+  socklen_t clientlen;
+  struct sockaddr_storage clientaddr;
+  MultipleArg *multiple_arg;
+  pthread_t tid;
+
+  /* Check command line args */
+  if (argc != 2)
+  {
+    fprintf(stderr, "usage: %s <port>\n", argv[0]);
+    exit(1);
+  }
+  
+  listenfd = Open_listenfd(argv[1]); // 듣기 소켓 오픈 - 연결 요청 기다림 시작... 리턴값 : 음이아닌정수
+  printf("연결요청기다림시작...listen\r\n");
+  
+  /* 무한 서버 루프 */
+  while (1)
+  {
+    /*메모리 공간 할당*/
+    clientlen = sizeof(clientaddr);
+    multiple_arg = (MultipleArg *)malloc(sizeof(MultipleArg));
+
+    
+    printf("연결요청기다리는 중...while\r\n");
+    /* 
+    * 클라이언트와 서버 사이에 성립된 연결 끝점
+    * 서버가 연결 요청을 수락할 때마다 생성됨
+    * 서버가 클라이언트에 서비스 하는 동안 존재
+    */
+    multiple_arg->connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);     
+    printf("연결요청받아서기다림끝...accept끝\r\n");
+
+    /* 연결 요청 접수 - 클라이언이름, 포트번호 알아오기 */
+    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
+    strcpy(multiple_arg->hostname, hostname);
+    strcpy(multiple_arg->port, port);
+    printf("Accepted connection from (%s, %s)\n", hostname, port);
+
+    /* 스레드 생성 - tid 생성, 구조체 전달, 스레드 실행 */
+    Pthread_create(&tid, NULL, thread, multiple_arg);
+  }
+}
+
+void *thread(void *vargp)
 {
-  int is_static;
-  struct stat sbuf;
+  MultipleArg my_arg = *((MultipleArg *)vargp);
+  Pthread_detach(pthread_self()); 
+  Free(vargp);
+  doit(&my_arg);
+  Close(my_arg.connfd);
+  return NULL; 
+}
+
+/* doit : 한 개의 HTTP transaction 처리 */
+void doit(MultipleArg *arg)
+{
+  int is_static , end_fd;
   char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   char filename[MAXLINE], cgiargs[MAXLINE], end_host[MAXLINE], end_port[MAXLINE], rqheader[MAXLINE];
-  int end_fd;
   size_t n;
-  rio_t rio;
-  rio_t rio2;
+  rio_t rio, rio2;
   static pthread_once_t once = PTHREAD_ONCE_INIT;
-  struct MultipleArg my_arg;
-  my_arg = *((struct MultipleArg *)arg);
+  MultipleArg my_arg = *arg;
 
   /* Request Line과 헤더를 읽기 */
   Rio_readinitb(&rio, my_arg.connfd);
-  
   Rio_readlineb(&rio, buf, MAXLINE);
   printf("Request headers:\n");
   printf("%s", buf);
@@ -74,9 +124,9 @@ void my_doit(struct MultipleArg *arg)
   /* URI를 parsing 하고, 요청받은 것이 static contents인지 판단하는 플래그 설정 */
   // is_static = parse_uri(uri, filename, cgiargs);
 
-
    if (end_fd <0){
     printf("파싱해서... end_host, end_port로 열었는데 에러나는듯...ㅠㅠ");
+    // ##### 에러 처리
     return;
   }
 
@@ -94,7 +144,6 @@ void my_doit(struct MultipleArg *arg)
   printf("Debug: strlen(rqheader) is... %d \n",strlen(rqheader));
   printf("Debug: endfd is... %d \n",end_fd);  
 
-
   Rio_readinitb(&rio2, end_fd);
   
   Rio_writen(end_fd, rqheader, strlen(rqheader));
@@ -102,72 +151,14 @@ void my_doit(struct MultipleArg *arg)
   // 송이 -> 예린 전달 완료!!!
   //V(&mutex);
 
-
   while ((n = Rio_readlineb(&rio2, buf, MAXLINE)) != 0)
   {                                                                    // 송이는 예린이가 준 답장 읽음
     printf("나는 송이, %d바이트를 받고 중선이한테 그대~로 넘겨줌", n); // 답장을 중선에게 주겠음
-    
     Rio_writen(my_arg.connfd, buf, n); //송이 -> 중선
     //모든 과정이 완료됨! 중선->송이->예린->송이->중선
   }
   
 }
-
-
-int main(int argc, char **argv)
-{
-  int listenfd, *connfdp;
-  char hostname[MAXLINE], port[MAXLINE];
-  socklen_t clientlen;
-  struct sockaddr_storage clientaddr;
-  struct MultipleArg *multiple_arg;
-  pthread_t tid;
-
-
-
-  /* Check command line args */
-  if (argc != 2)
-  {
-    fprintf(stderr, "usage: %s <port>\n", argv[0]);
-    exit(1);
-  }
-  listenfd = Open_listenfd(argv[1]); // 듣기 소켓 오픈
-
-
-  /* 무한 서버 루프 */
-  while (1)
-  {
-    clientlen = sizeof(clientaddr);
-    void * temp = malloc(sizeof(struct MultipleArg));
-    multiple_arg = (struct MultipleArg *)temp;
-    multiple_arg->connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-    
-    /* 연결 요청 접수 */
-    //connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
-    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
-    strcpy(multiple_arg->hostname, hostname);
-    strcpy(multiple_arg->port, port);
-    printf("Accepted connection from (%s, %s)\n", hostname, port);
-
-
-    /* Transaction 수행 */
-    Pthread_create(&tid, NULL, thread, multiple_arg);
-    // printf("나 이제 doit 실행한다...????");
-  }
-}
-
-void *thread(void *vargp)
-{
-  struct MultipleArg my_arg;
-  my_arg = *((struct MultipleArg *)vargp);
-  Pthread_detach(pthread_self()); 
-  Free(vargp);
-  my_doit(&my_arg);
-  Close(my_arg.connfd);
-  return NULL; 
-}
-
-
 
 void make_packet(char *rqheader, char *filename, char *end_host, char *end_port)
 {
@@ -182,8 +173,6 @@ void make_packet(char *rqheader, char *filename, char *end_host, char *end_port)
   //TBD: 추가적인 요청헤더를 HTTP요청에 담아보낸다면, 그대로 서버에 전달
   //(중선해석): 크롬(클라이언트) -> proxy할 때, 뭔가 추가적인 정보를 줘도 그거 그대~로 다받아서 전달시키라는 뜻인 것 같음
 }
-
-
 
 /* parse_uri: HTTP URI를 분석하기 */
 int parse_uri(char *uri, char *filename, char *end_host, char *end_port)
