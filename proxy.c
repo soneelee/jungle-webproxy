@@ -137,6 +137,7 @@ void doit(int connfd)
 
   /* 캐시 생성 */
 
+  MultipleArg *cache_thread = (MultipleArg *)Malloc(sizeof(MultipleArg));
   
 
   /* 예린 -> 송이 -> 중선 */
@@ -236,18 +237,18 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   Rio_writen(fd, body, strlen(body));
 }
 
-// void *thread(void *vargp)
-// {
+void *thread(void *vargp)
+{
   
-//   MultipleArg *multiple_arg = (MultipleArg *)Malloc(sizeof(MultipleArg));
-//   multiple_arg->connfd = *((int *)vargp);
+  MultipleArg *multiple_arg = (MultipleArg *)Malloc(sizeof(MultipleArg));
+  multiple_arg->connfd = *((int *)vargp);
 
-//   Pthread_detach(pthread_self()); 
-//   Free(multiple_arg);
+  Pthread_detach(pthread_self()); 
+  Free(multiple_arg);
 
-//   doit(multiple_arg);
+  doit(multiple_arg);
 
-//   Close(multiple_arg->connfd);
+  Close(multiple_arg->connfd);
 
-//   return NULL; 
-// }
+  return NULL; 
+}
