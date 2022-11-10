@@ -6,18 +6,18 @@ typedef struct MultipleArg MultipleArg;
 typedef struct CachedData CachedData;
 typedef struct Cachelist Cachelist;
 
-struct Cachelist
+typedef struct _Cachelist
 {
     CachedData *head;
     // CachedData *tail; // tail would not be used in sunny's code
-};
+} Cachelist;
 
-struct CachedData
+typedef struct _CachedData
 {
     char *c_key[MAXBUF];
     char *c_val;
     CachedData *next;
-};
+} CachedData;
 
 struct MultipleArg
 {
@@ -32,19 +32,26 @@ void initcachelist()
     cachelist.head->next = NULL;
 };
 
-void insertcache(CachedData my_data){
-    // TBD
+void insertcache(Cachelist *list, CachedData *my_data)
+{
+    CachedData *p = list->head;
+    list->head = my_data;
+    list->head->next = p;
+    return;
 };
 
-void *findcache(Cachelist list)
+CachedData *findcache(Cachelist list, char* hostname)
 {
-    if (list.head == NULL)
+    CachedData *cur_cache = list.head;
+
+    while (cur_cache != NULL)
     {
-        return NULL;
+        if (!strcmp(cur_cache->c_key, hostname))
+            return cur_cache;
+            
+        else
+            cur_cache = cur_cache->next;
     }
-    else
-    {
-        // 쭉쭉내려가면서 해당 파일명 찾기
-    }
+    
     return NULL;
 };
